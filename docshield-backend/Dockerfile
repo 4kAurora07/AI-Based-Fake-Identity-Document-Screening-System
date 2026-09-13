@@ -25,9 +25,10 @@ RUN groupadd -r docshield && useradd -r -g docshield -m -d /home/docshield docsh
 
 WORKDIR /app
 
-# Install pinned Python dependencies
+# Install PyTorch CPU wheel first (150MB instead of 2.8GB GPU wheel, preventing build timeouts and OOM)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application source code
 COPY . .
@@ -43,8 +44,8 @@ USER docshield
 EXPOSE 5000
 
 # Healthcheck validating API availability
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:5000/api/v1/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-5000}/api/v1/health || exit 1
 
-# Production WSGI server execution via Gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "2", "--timeout", "60", "wsgi:app"]
+# Production WSGI server execution via Gunicorn (tuned for low-memory container platforms like Render)
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 1 --threads 4 --timeout 120 wsgi:app"]

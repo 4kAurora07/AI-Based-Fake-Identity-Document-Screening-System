@@ -4,6 +4,7 @@
  * Zero mock, hardcoded, or randomly-generated results.
  */
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 const SESSION_STORAGE_KEY = 'docshield_session_id'
 
 function getSessionHeaders() {
@@ -72,7 +73,7 @@ export const api = {
   // 1. Get Dashboard Counters & Quick KPIs from real database
   async getDashboardStats() {
     try {
-      const res = await fetch('/api/stats', {
+      const res = await fetch(`${API_BASE_URL}/api/stats`, {
         credentials: 'include',
         headers: { ...getSessionHeaders() }
       })
@@ -106,7 +107,7 @@ export const api = {
   // 2. Get Recent Verifications from real database
   async getRecentVerifications(limit = 5) {
     try {
-      const res = await fetch(`/api/history?limit=${limit}`, {
+      const res = await fetch(`${API_BASE_URL}/api/history?limit=${limit}`, {
         credentials: 'include',
         headers: { ...getSessionHeaders() }
       })
@@ -125,7 +126,9 @@ export const api = {
   // 3. Get Verification History with Filter & Search from real database
   async getVerificationHistory({ search = '', status = 'all', docType = 'all' } = {}) {
     try {
-      const url = status && status !== 'all' ? `/api/history?verdict=${status}&limit=100` : '/api/history?limit=100'
+      const url = status && status !== 'all' 
+        ? `${API_BASE_URL}/api/history?verdict=${status}&limit=100` 
+        : `${API_BASE_URL}/api/history?limit=100`
       const res = await fetch(url, {
         credentials: 'include',
         headers: { ...getSessionHeaders() }
@@ -165,7 +168,7 @@ export const api = {
   // 4. Get a Single Verification Audit by ID from real database (IDOR protected)
   async getVerificationById(id) {
     try {
-      const res = await fetch(`/api/scan/${encodeURIComponent(id)}`, {
+      const res = await fetch(`${API_BASE_URL}/api/scan/${encodeURIComponent(id)}`, {
         credentials: 'include',
         headers: { ...getSessionHeaders() }
       })
@@ -220,7 +223,7 @@ export const api = {
 
     let response
     try {
-      response = await fetch('/api/analyze', {
+      response = await fetch(`${API_BASE_URL}/api/analyze`, {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -254,8 +257,8 @@ export const api = {
   async getAnalyticsData() {
     try {
       const [statsRes, historyRes] = await Promise.all([
-        fetch('/api/stats', { credentials: 'include', headers: { ...getSessionHeaders() } }),
-        fetch('/api/history?limit=100', { credentials: 'include', headers: { ...getSessionHeaders() } })
+        fetch(`${API_BASE_URL}/api/stats`, { credentials: 'include', headers: { ...getSessionHeaders() } }),
+        fetch(`${API_BASE_URL}/api/history?limit=100`, { credentials: 'include', headers: { ...getSessionHeaders() } })
       ])
 
       const stats = statsRes.ok ? await statsRes.json() : {}
