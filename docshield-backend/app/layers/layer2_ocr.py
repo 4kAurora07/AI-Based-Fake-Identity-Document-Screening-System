@@ -214,14 +214,14 @@ class OCRForensicExtractor:
         max_dim = max(w, h)
 
         # Adaptive resolution optimization:
-        # Cap max_dim to 1024px to prevent memory spikes in resource-constrained environments (e.g. 512MB RAM)
-        if max_dim > 1024:
-            scale = 1024.0 / max_dim
+        # Cap max_dim to 640px to guarantee fast execution (<10s) and low memory (<100MB) on CPU
+        if max_dim > 640:
+            scale = 640.0 / max_dim
             new_w = max(1, int(w * scale))
             new_h = max(1, int(h * scale))
             ocr_img = ocr_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
         elif min_dim < 400:
-            scale = min(2.0, 600.0 / max(1, min_dim))
+            scale = min(1.8, 540.0 / max(1, min_dim))
             new_w = max(1, int(w * scale))
             new_h = max(1, int(h * scale))
             ocr_img = ocr_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
@@ -232,9 +232,9 @@ class OCRForensicExtractor:
                 pytesseract.pytesseract.tesseract_cmd = custom_cmd
             try:
                 try:
-                    tess_text = pytesseract.image_to_string(ocr_img, lang="eng+hin") or ""
-                except Exception:
                     tess_text = pytesseract.image_to_string(ocr_img, lang="eng") or ""
+                except Exception:
+                    tess_text = ""
                 tess_lines = [l.strip() for l in tess_text.split("\n") if l.strip()]
                 if len(tess_lines) >= 3:
                     raw_text = tess_text
@@ -257,7 +257,7 @@ class OCRForensicExtractor:
                     except Exception:
                         input_for_ocr = img_np
 
-                    results = reader.readtext(input_for_ocr)
+                    results = reader.readtext(input_for_ocr, batch_size=4)
                     if results:
                         sorted_results = sorted(results, key=lambda item: (item[0][0][1], item[0][0][0]))
                         line_groups: List[List[Tuple[Any, str, float]]] = []

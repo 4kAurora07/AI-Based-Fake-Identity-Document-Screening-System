@@ -182,7 +182,7 @@ def _extract_gemini(image: Image.Image, ocr_hint: str = "") -> Optional[Dict[str
         if ocr_hint and len(ocr_hint.strip()) > 20:
             prompt_parts.append(f"\nOCR context (cross-reference only):\n{ocr_hint[:800]}")
 
-        candidate_models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest", "gemini-3.7-flash"]
+        candidate_models = ["gemini-3.6-flash"]
         for model_name in candidate_models:
             try:
                 response = client.models.generate_content(
@@ -204,7 +204,7 @@ def _extract_gemini(image: Image.Image, ocr_hint: str = "") -> Optional[Dict[str
                     return _normalize(parsed)
             except Exception as m_err:
                 logger.warning("Gemini model %s failed: %s", model_name, m_err)
-                continue
+                break  # Don't retry or block if unavailable
     except Exception as e:
         logger.warning("Gemini extraction failed (%s) — trying next provider.", e)
     return None
@@ -268,31 +268,35 @@ def _extract_groq(image: Image.Image, ocr_hint: str = "") -> Optional[Dict[str, 
 # Public API
 # ---------------------------------------------------------------------------
 
+import concurrent.futures
+
 def extract_fields_with_ai(
     image: Image.Image,
     ocr_text_hint: str = "",
 ) -> Dict[str, Any]:
     """
-    Extract structured identity fields from a document image.
-
-    Tries Gemini 2.5 Flash first, falls back to Groq, then returns {} gracefully.
-    Never raises.
+    Extract structured identity fields from a document image with a strict 2.5s ceiling.
+    Tries Gemini, falls back to Groq, then returns {} gracefully. Never blocks or raises.
     """
-    result = _extract_gemini(image, ocr_text_hint)
-    if result:
-        result["ai_provider"] = "gemini-2.5-flash"
-        return result
+    def _do_extract():
+        result = _extract_gemini(image, ocr_text_hint)
+        if result:
+            result["ai_provider"] = "gemini"
+            return result
 
-    result = _extract_groq(image, ocr_text_hint)
-    if result:
-        result["ai_provider"] = "groq-llama-3.2-vision"
-        return result
+        result = _extract_groq(image, ocr_text_hint)
+        if result:
+            result["ai_provider"] = "groq-llama-3.2-vision"
+            return result
+        return {}
 
-    logger.warning(
-        "All AI providers unavailable — OCR-only mode active. "
-        "Set GEMINI_API_KEY or GROQ_API_KEY in .env to enable AI extraction."
-    )
-    return {}
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_do_extract)
+            return fut.result(timeout=2.5)
+    except Exception as e:
+        logger.info("Cloud LLM extraction skipped or timed out (%s) — using local OCR.", str(e))
+        return {}
 
 
 def merge_ai_and_ocr_fields(

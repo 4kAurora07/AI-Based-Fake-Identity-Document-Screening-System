@@ -109,11 +109,11 @@ def execute_parallel_analysis(
     start_time = time.perf_counter()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        future_l1 = executor.submit(run_layer1_analysis, image, headers, form_data)
-        future_l2 = executor.submit(run_layer2_analysis, image, tesseract_cmd)
-        future_l3 = executor.submit(run_layer3_analysis, image)
-        future_l4 = executor.submit(run_layer4_analysis, image, model_weights_path)
-        future_face = executor.submit(CrossDocumentFaceMatcher.compare_documents, image, secondary_image)
+        future_l1 = executor.submit(run_layer1_analysis, image.copy(), headers, form_data)
+        future_l2 = executor.submit(run_layer2_analysis, image.copy(), tesseract_cmd)
+        future_l3 = executor.submit(run_layer3_analysis, image.copy())
+        future_l4 = executor.submit(run_layer4_analysis, image.copy(), model_weights_path)
+        future_face = executor.submit(CrossDocumentFaceMatcher.compare_documents, image.copy(), secondary_image.copy() if secondary_image else None)
 
         # Document Source Verification has no layer dependencies — run it in parallel too
         def _run_source_verification():
@@ -151,7 +151,7 @@ def execute_parallel_analysis(
                 remaining = max(0.1, deadline - time.perf_counter())
                 return fut.result(timeout=remaining)
             except Exception as e:
-                logger.error("%s execution failed or reached deadline: %s", task_name, str(e))
+                logger.error("%s execution failed or reached deadline (%s): %s", task_name, type(e).__name__, repr(e))
                 return default_val
 
         # Collect results with strict shared deadline
