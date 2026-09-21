@@ -85,13 +85,6 @@ def create_app(config_name: str = None) -> Flask:
         except Exception as e:
             app.logger.warning("EfficientNet-B0 pre-warm skipped: %s", str(e))
 
-        try:
-            from app.layers.layer2_ocr import get_easyocr_reader
-            get_easyocr_reader()
-            app.logger.info("EasyOCR reader initialized successfully.")
-        except Exception as e:
-            app.logger.warning("EasyOCR pre-warm skipped: %s", str(e))
-
     return app
 
 

@@ -214,92 +214,87 @@ class OCRForensicExtractor:
         max_dim = max(w, h)
 
         # Adaptive resolution optimization:
-        # Standard ID cards / text characters require at least 20-30px height per character line.
-        # If an uploaded image is small (e.g. mobile crop under 600px min_dim or 1200px max_dim),
-        # upscale with Lanczos interpolation so fine 8pt/9pt print is clearly distinguishable.
-        if min_dim < 600 or max_dim < 1200:
-            scale = min(3.5, max(750.0 / max(1, min_dim), 1250.0 / max(1, max_dim)))
-            if max_dim * scale > 2200:
-                scale = 2200.0 / max_dim
+        # Cap max_dim to 1024px to prevent memory spikes in resource-constrained environments (e.g. 512MB RAM)
+        if max_dim > 1024:
+            scale = 1024.0 / max_dim
             new_w = max(1, int(w * scale))
             new_h = max(1, int(h * scale))
-            ocr_img = ocr_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        elif max_dim > 1800:
-            scale = 1800.0 / max_dim
+            ocr_img = ocr_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+        elif min_dim < 400:
+            scale = min(2.0, 600.0 / max(1, min_dim))
             new_w = max(1, int(w * scale))
             new_h = max(1, int(h * scale))
-            ocr_img = ocr_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            ocr_img = ocr_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
 
-        # 1. Primary Engine: EasyOCR
-        reader = get_easyocr_reader()
-        if reader is not None:
-            try:
-                img_np = np.array(ocr_img)
-
-                # Contrast enhancement via OpenCV CLAHE to suppress guilloche background interference
-                try:
-                    import cv2
-                    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-                    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                    enhanced_gray = clahe.apply(gray)
-                    input_for_ocr = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2RGB)
-                except Exception:
-                    input_for_ocr = img_np
-
-                results = reader.readtext(input_for_ocr)
-                if results:
-                    # Sort primarily by vertical coordinate (top-left Y)
-                    sorted_results = sorted(results, key=lambda item: (item[0][0][1], item[0][0][0]))
-                    line_groups: List[List[Tuple[Any, str, float]]] = []
-
-                    for item in sorted_results:
-                        bbox, txt, conf = item
-                        txt_clean = txt.strip()
-                        if not txt_clean:
-                            continue
-                        tokens_info.append({
-                            "text": txt_clean,
-                            "confidence": round(float(conf), 3),
-                            "bbox": bbox,
-                        })
-
-                        y_mid = (bbox[0][1] + bbox[2][1]) / 2.0
-                        h_box = max(10, abs(bbox[2][1] - bbox[0][1]))
-
-                        placed = False
-                        for group in line_groups:
-                            group_y_mid = sum((b[0][1] + b[2][1]) / 2.0 for b, _, _ in group) / len(group)
-                            if abs(y_mid - group_y_mid) < (h_box * 0.70):
-                                group.append(item)
-                                placed = True
-                                break
-                        if not placed:
-                            line_groups.append([item])
-
-                    # Sort tokens in each line group horizontally from left to right
-                    for group in line_groups:
-                        group_sorted = sorted(group, key=lambda item: item[0][0][0])
-                        line_str = " ".join(item[1].strip() for item in group_sorted if item[1].strip())
-                        if line_str:
-                            lines.append(line_str)
-
-                    raw_text = "\n".join(lines)
-            except Exception as e:
-                logger.warning("EasyOCR inference error: %s", str(e))
-
-        # 2. Fallback Engine: Tesseract
-        if not raw_text and pytesseract is not None:
+        # 1. Fast, low-memory engine: Tesseract (C++ runtime, <20MB RAM, sub-second execution)
+        if pytesseract is not None:
             if custom_cmd:
                 pytesseract.pytesseract.tesseract_cmd = custom_cmd
             try:
-                # Include both English and Hindi if available
                 try:
-                    raw_text = pytesseract.image_to_string(ocr_img, lang="eng+hin") or ""
+                    tess_text = pytesseract.image_to_string(ocr_img, lang="eng+hin") or ""
                 except Exception:
-                    raw_text = pytesseract.image_to_string(ocr_img, lang="eng") or ""
-                lines = [l.strip() for l in raw_text.split("\n") if l.strip()]
+                    tess_text = pytesseract.image_to_string(ocr_img, lang="eng") or ""
+                tess_lines = [l.strip() for l in tess_text.split("\n") if l.strip()]
+                if len(tess_lines) >= 3:
+                    raw_text = tess_text
+                    lines = tess_lines
             except Exception as e:
-                logger.warning("Tesseract OCR execution error: %s", str(e))
+                logger.debug("Tesseract OCR initial pass: %s", str(e))
+
+        # 2. Secondary Engine: EasyOCR (runs if Tesseract found insufficient lines)
+        if not raw_text or len(lines) < 3:
+            reader = get_easyocr_reader()
+            if reader is not None:
+                try:
+                    img_np = np.array(ocr_img)
+                    try:
+                        import cv2
+                        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                        enhanced_gray = clahe.apply(gray)
+                        input_for_ocr = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2RGB)
+                    except Exception:
+                        input_for_ocr = img_np
+
+                    results = reader.readtext(input_for_ocr)
+                    if results:
+                        sorted_results = sorted(results, key=lambda item: (item[0][0][1], item[0][0][0]))
+                        line_groups: List[List[Tuple[Any, str, float]]] = []
+
+                        for item in sorted_results:
+                            bbox, txt, conf = item
+                            txt_clean = txt.strip()
+                            if not txt_clean:
+                                continue
+                            tokens_info.append({
+                                "text": txt_clean,
+                                "confidence": round(float(conf), 3),
+                                "bbox": bbox,
+                            })
+
+                            y_mid = (bbox[0][1] + bbox[2][1]) / 2.0
+                            h_box = max(10, abs(bbox[2][1] - bbox[0][1]))
+
+                            placed = False
+                            for group in line_groups:
+                                group_y_mid = sum((b[0][1] + b[2][1]) / 2.0 for b, _, _ in group) / len(group)
+                                if abs(y_mid - group_y_mid) < (h_box * 0.70):
+                                    group.append(item)
+                                    placed = True
+                                    break
+                            if not placed:
+                                line_groups.append([item])
+
+                        for group in line_groups:
+                            group_sorted = sorted(group, key=lambda item: item[0][0][0])
+                            line_str = " ".join(item[1].strip() for item in group_sorted if item[1].strip())
+                            if line_str:
+                                lines.append(line_str)
+
+                        raw_text = "\n".join(lines)
+                except Exception as e:
+                    logger.warning("EasyOCR inference error: %s", str(e))
 
         # Debug logging: output the full raw text blocks extracted by OCR
         logger.info("=== RAW OCR EXTRACTED TEXT (Lines: %d) ===", len(lines))
