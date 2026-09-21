@@ -108,7 +108,8 @@ def execute_parallel_analysis(
     """Executes all core forensic, OCR, and verification layers concurrently."""
     start_time = time.perf_counter()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+    try:
         future_l1 = executor.submit(run_layer1_analysis, image.copy(), headers, form_data)
         future_l2 = executor.submit(run_layer2_analysis, image.copy(), tesseract_cmd)
         future_l3 = executor.submit(run_layer3_analysis, image.copy())
@@ -295,6 +296,8 @@ def execute_parallel_analysis(
             },
             "Barcode Cross-Check",
         )
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000.0
 
