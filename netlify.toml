@@ -5,12 +5,12 @@
 [build.environment]
   NODE_VERSION = "20"
 
-# 1. API Reverse Proxy (Uncomment and replace with your deployed backend URL, e.g., Render/Railway)
-# [[redirects]]
-#   from = "/api/*"
-#   to = "https://YOUR-BACKEND-URL.onrender.com/api/:splat"
-#   status = 200
-#   force = true
+# 1. API Reverse Proxy (Bypasses CORS by proxying all /api/* requests to Render backend)
+[[redirects]]
+  from = "/api/*"
+  to = "https://docshield-backend-pqi5.onrender.com/api/:splat"
+  status = 200
+  force = true
 
 # 2. Single Page Application (SPA) Client-side Routing Fallback
 [[redirects]]
