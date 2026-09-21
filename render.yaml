@@ -1,3 +1,7 @@
+databases:
+  - name: docshield-db
+    plan: free
+
 services:
   - type: web
     name: docshield-backend
@@ -14,8 +18,13 @@ services:
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: DOCSHIELD_AES_KEY
-        value: 897aa89efdea98fe834ce38cc4abc35e1a767af6a363244bf2a6cc54827167d2
+        generateValue: true
       - key: CORS_ALLOWED_ORIGINS
         value: https://docshield-innovx.netlify.app,http://localhost:5173
       - key: RETAIN_UPLOADS_FOR_DEMO
         value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: docshield-db
+          property: connectionString
+

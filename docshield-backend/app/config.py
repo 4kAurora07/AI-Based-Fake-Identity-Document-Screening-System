@@ -7,6 +7,7 @@ environments with strict validation against insecure defaults.
 from datetime import timedelta
 import os
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 # Base directory for the backend (where wsgi.py / app directory lives)
@@ -14,6 +15,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load local environment variables from .env
 load_dotenv(BASE_DIR / ".env")
+
+
+def normalize_database_url(url: Optional[str]) -> Optional[str]:
+    """Normalizes database connection schemes for SQLAlchemy 2.0+ compatibility.
+
+    Render, Heroku, and cloud platforms provide connection strings starting with 'postgres://',
+    which SQLAlchemy 1.4+ and 2.0+ reject in favor of 'postgresql://'.
+    """
+    if not url:
+        return url
+    url_str = str(url).strip()
+    if url_str.startswith("postgres://"):
+        return "postgresql://" + url_str[len("postgres://"):]
+    return url_str
+
 
 
 class BaseConfig:
@@ -82,8 +98,11 @@ class DevelopmentConfig(BaseConfig):
 
     DEBUG = True
     TESTING = False
-    SQLALCHEMY_DATABASE_URI = os.getenv(
-        "DATABASE_URL", f"sqlite:///{BASE_DIR / 'instance' / 'docshield_dev.db'}"
+    _dev_db = os.getenv("DATABASE_URL")
+    SQLALCHEMY_DATABASE_URI = (
+        normalize_database_url(_dev_db)
+        if _dev_db and _dev_db.strip()
+        else f"sqlite:///{BASE_DIR / 'instance' / 'docshield_dev.db'}"
     )
 
 
@@ -108,8 +127,9 @@ class ProductionConfig(BaseConfig):
     DEBUG = False
     TESTING = False
 
-    # Force database URL configuration (gracefully falls back to local SQLite if DATABASE_URL is not set)
-    SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL") or "sqlite:///instance/docshield.db"
+    # Production database URI parsed from DATABASE_URL (normalized for SQLAlchemy 2.0+)
+    _prod_db = os.getenv("DATABASE_URL")
+    SQLALCHEMY_DATABASE_URI = normalize_database_url(_prod_db) if _prod_db and _prod_db.strip() else None
 
     # Cross-site cookie configuration for Netlify <-> Render communication
     SESSION_COOKIE_SECURE = True
@@ -118,9 +138,19 @@ class ProductionConfig(BaseConfig):
 
     @classmethod
     def init_app(cls, app):
-        """Ensure critical production environment settings are active without crashing."""
-        if not cls.SQLALCHEMY_DATABASE_URI:
-            cls.SQLALCHEMY_DATABASE_URI = "sqlite:///instance/docshield.db"
+        """Ensure critical production environment settings are active with fail-fast validation."""
+        db_url = os.getenv("DATABASE_URL") or app.config.get("SQLALCHEMY_DATABASE_URI")
+        if not db_url or not str(db_url).strip():
+            raise ValueError(
+                "CRITICAL CONFIGURATION ERROR: DATABASE_URL environment variable is required in production "
+                "mode but is not configured. Please attach a persistent database (such as Render PostgreSQL) "
+                "or set DATABASE_URL."
+            )
+
+        normalized_url = normalize_database_url(db_url)
+        app.config["SQLALCHEMY_DATABASE_URI"] = normalized_url
+        cls.SQLALCHEMY_DATABASE_URI = normalized_url
+
         if not app.config.get("SECRET_KEY"):
             app.config["SECRET_KEY"] = cls.SECRET_KEY
         if not app.config.get("JWT_SECRET_KEY"):
