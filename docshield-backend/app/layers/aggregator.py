@@ -108,12 +108,41 @@ def execute_parallel_analysis(
     """Executes all core forensic, OCR, and verification layers concurrently."""
     start_time = time.perf_counter()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         future_l1 = executor.submit(run_layer1_analysis, image, headers, form_data)
         future_l2 = executor.submit(run_layer2_analysis, image, tesseract_cmd)
         future_l3 = executor.submit(run_layer3_analysis, image)
         future_l4 = executor.submit(run_layer4_analysis, image, model_weights_path)
         future_face = executor.submit(CrossDocumentFaceMatcher.compare_documents, image, secondary_image)
+
+        # Document Source Verification has no layer dependencies — run it in parallel too
+        def _run_source_verification():
+            try:
+                if is_pdf and raw_bytes:
+                    return DocumentSourceVerifier.inspect_pdf_source(raw_bytes, filename=filename)
+                elif raw_bytes:
+                    return DocumentSourceVerifier.inspect_image_source(
+                        raw_bytes, filename=filename, width=image.width, height=image.height
+                    )
+                else:
+                    return {
+                        "status": "UNABLE TO DETERMINE",
+                        "confidence": 50.0,
+                        "description": "Raw container stream not provided for metadata analysis",
+                        "evidence_signals": [],
+                        "limitations": "Requires un-sanitized byte stream to inspect EXIF headers.",
+                    }
+            except Exception as e:
+                logger.error("Document Source verification error: %s", str(e))
+                return {
+                    "status": "UNABLE TO DETERMINE",
+                    "confidence": 50.0,
+                    "description": f"Source inspection error: {str(e)}",
+                    "evidence_signals": [],
+                    "limitations": "Error analyzing document source.",
+                }
+
+        future_source = executor.submit(_run_source_verification)
 
         # Collect results with timeout safety
         try:
@@ -142,6 +171,40 @@ def execute_parallel_analysis(
                 "cross_check_matches": True,
                 "anomalies": ["Layer 2 processing error: " + (str(e) or "Timeout")],
             }
+
+        # Submit dependent tasks as soon as Layer 2 results are available
+        def _run_visual_forensics():
+            try:
+                ocr_lines = res_l2.get("fields", {}).get("raw_lines", [])
+                return VisualForensicsEngine.analyze_layout_consistency(image, ocr_lines=ocr_lines)
+            except Exception as e:
+                logger.error("Visual forensics error: %s", str(e))
+                return {
+                    "status": "PASS",
+                    "confidence": 60.0,
+                    "evidence": [],
+                    "limitations": "Visual forensics inspection completed with fallback defaults.",
+                }
+
+        def _run_barcode_crosscheck():
+            try:
+                ocr_fields = res_l2.get("fields", {})
+                doc_type = res_l2.get("document_type", "unknown")
+                return BarcodeCrossCheckEngine.cross_check(image, ocr_fields, doc_type=doc_type)
+            except Exception as e:
+                logger.error("Barcode cross-check error: %s", str(e))
+                return {
+                    "status": "NOT DETECTED",
+                    "confidence": 50.0,
+                    "barcode_detected": False,
+                    "details": f"Barcode cross-check error: {str(e)}",
+                    "matched_fields": [],
+                    "mismatched_fields": [],
+                    "limitations": "Barcode decoder encountered an error.",
+                }
+
+        future_visual = executor.submit(_run_visual_forensics)
+        future_barcode = executor.submit(_run_barcode_crosscheck)
 
         try:
             res_l3 = future_l3.result(timeout=timeout_seconds)
@@ -186,61 +249,43 @@ def execute_parallel_analysis(
                 "limitations": "Face matching encountered an execution error.",
             }
 
-    # Execute Document Source Verification
-    try:
-        if is_pdf and raw_bytes:
-            res_source = DocumentSourceVerifier.inspect_pdf_source(raw_bytes, filename=filename)
-        elif raw_bytes:
-            res_source = DocumentSourceVerifier.inspect_image_source(
-                raw_bytes, filename=filename, width=image.width, height=image.height
-            )
-        else:
+        # Collect the parallel post-processing results
+        try:
+            res_source = future_source.result(timeout=timeout_seconds)
+        except Exception as e:
+            logger.error("Source verification future error: %s", str(e))
             res_source = {
                 "status": "UNABLE TO DETERMINE",
                 "confidence": 50.0,
-                "description": "Raw container stream not provided for metadata analysis",
+                "description": f"Source inspection error: {str(e)}",
                 "evidence_signals": [],
-                "limitations": "Requires un-sanitized byte stream to inspect EXIF headers.",
+                "limitations": "Error analyzing document source.",
             }
-    except Exception as e:
-        logger.error("Document Source verification error: %s", str(e))
-        res_source = {
-            "status": "UNABLE TO DETERMINE",
-            "confidence": 50.0,
-            "description": f"Source inspection error: {str(e)}",
-            "evidence_signals": [],
-            "limitations": "Error analyzing document source.",
-        }
 
-    # Execute Visual Forensics & Layout Consistency Engine
-    try:
-        ocr_lines = res_l2.get("fields", {}).get("raw_lines", [])
-        res_visual = VisualForensicsEngine.analyze_layout_consistency(image, ocr_lines=ocr_lines)
-    except Exception as e:
-        logger.error("Visual forensics error: %s", str(e))
-        res_visual = {
-            "status": "PASS",
-            "confidence": 60.0,
-            "evidence": [],
-            "limitations": "Visual forensics inspection completed with fallback defaults.",
-        }
+        try:
+            res_visual = future_visual.result(timeout=timeout_seconds)
+        except Exception as e:
+            logger.error("Visual forensics future error: %s", str(e))
+            res_visual = {
+                "status": "PASS",
+                "confidence": 60.0,
+                "evidence": [],
+                "limitations": "Visual forensics inspection completed with fallback defaults.",
+            }
 
-    # Execute Barcode / QR Forensic Cross-Check
-    try:
-        ocr_fields = res_l2.get("fields", {})
-        doc_type = res_l2.get("document_type", "unknown")
-        res_barcode = BarcodeCrossCheckEngine.cross_check(image, ocr_fields, doc_type=doc_type)
-    except Exception as e:
-        logger.error("Barcode cross-check error: %s", str(e))
-        res_barcode = {
-            "status": "NOT DETECTED",
-            "confidence": 50.0,
-            "barcode_detected": False,
-            "details": f"Barcode cross-check error: {str(e)}",
-            "matched_fields": [],
-            "mismatched_fields": [],
-            "limitations": "Barcode decoder encountered an error.",
-        }
+        try:
+            res_barcode = future_barcode.result(timeout=timeout_seconds)
+        except Exception as e:
+            logger.error("Barcode cross-check future error: %s", str(e))
+            res_barcode = {
+                "status": "NOT DETECTED",
+                "confidence": 50.0,
+                "barcode_detected": False,
+                "details": f"Barcode cross-check error: {str(e)}",
+                "matched_fields": [],
+                "mismatched_fields": [],
+                "limitations": "Barcode decoder encountered an error.",
+            }
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000.0
 

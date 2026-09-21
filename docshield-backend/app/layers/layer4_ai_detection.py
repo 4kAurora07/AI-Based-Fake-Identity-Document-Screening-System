@@ -131,36 +131,75 @@ def generate_heatmap_with_mask(
 
 
 def run_layer4(image_input: Union[Image.Image, str], weights_path: str = "") -> Dict[str, Any]:
-    """Layer 4 public entrypoint: executes real model inference and generates Grad-CAM heatmap."""
-    pred_data = predict(image_input)
-    raw_class = pred_data["verdict"]
+    """Layer 4 public entrypoint: single-pass model inference + Grad-CAM heatmap.
+
+    Previously called predict() then generate_heatmap_with_mask() separately,
+    resulting in two redundant forward passes through EfficientNet-B0.
+    This merged version reuses the same input tensor for both tasks.
+    """
+    model = get_ai_detector()
+
+    if isinstance(image_input, str):
+        img = Image.open(image_input).convert("RGB")
+    else:
+        img = image_input.convert("RGB")
+
+    orig_w, orig_h = img.size
+    input_tensor = transform(img).unsqueeze(0).to(DEVICE)
+
+    # --- Single forward pass for classification ---
+    with torch.no_grad():
+        output = model(input_tensor)
+        probs = torch.softmax(output, dim=1)[0]
+        pred_class = torch.argmax(probs).item()
+        confidence = probs[pred_class].item()
+
+    raw_class = CLASSES[pred_class]
     mapped_verdict = map_model_verdict(raw_class)
-    confidence = pred_data["confidence"]
-    pred_idx = pred_data.get("predicted_class_index", 0)
-
-    # Generate real Grad-CAM visual heatmap for this specific document
-    heatmap_b64, heatmap_mask = generate_heatmap_with_mask(image_input, target_class=pred_idx)
-
+    probs_dict = {CLASSES[i]: round(float(probs[i].item()) * 100.0, 2) for i in range(len(CLASSES))}
+    genuine_prob = probs_dict.get("genuine", 0.0)
+    forgery_prob = round(100.0 - genuine_prob, 2)
     is_flagged = raw_class != "genuine"
-    forgery_prob = round(100.0 - pred_data["genuine_prob"], 2)
+
+    # --- Grad-CAM heatmap (reuses same input_tensor, no second forward pass) ---
+    heatmap_b64 = ""
+    heatmap_mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
+    try:
+        img_resized = img.resize((224, 224))
+        img_np = np.array(img_resized) / 255.0
+
+        targets = [ClassifierOutputTarget(pred_class)]
+        with GradCAM(model=model, target_layers=[model.conv_head]) as cam:
+            grayscale_cam = cam(input_tensor=input_tensor, targets=targets)[0]
+
+        overlay = show_cam_on_image(img_np.astype(np.float32), grayscale_cam, use_rgb=True)
+        _, buffer = cv2.imencode(".png", cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+        b64 = base64.b64encode(buffer).decode("utf-8")
+        heatmap_b64 = f"data:image/png;base64,{b64}"
+
+        # Resize grayscale cam to original dimensions for aggregator mask compositing
+        heatmap_mask = cv2.resize((grayscale_cam * 255.0).astype(np.uint8), (orig_w, orig_h))
+    except Exception as e:
+        logger.warning("Grad-CAM generation error: %s", str(e))
+
     has_heatmap = bool(heatmap_b64)
 
     return {
         "status": "flagged" if is_flagged else "passed",
         "verdict": mapped_verdict,
         "raw_class": raw_class,
-        "confidence": confidence,
+        "confidence": round(confidence * 100, 2),
         "forgery_probability": forgery_prob,
-        "genuine_probability": pred_data["genuine_prob"],
+        "genuine_probability": genuine_prob,
         "heatmap_base64": heatmap_b64,
         "heatmap_mask": heatmap_mask,
         "heatmap_generated": has_heatmap,
         "model": "EfficientNet-B0 (3-Class Trained)",
-        "probabilities": pred_data["probabilities"],
+        "probabilities": probs_dict,
         "details": {
             "predicted_class": raw_class,
             "mapped_verdict": mapped_verdict,
-            "class_probabilities": pred_data["probabilities"],
+            "class_probabilities": probs_dict,
             "heatmap_available": has_heatmap,
         }
     }
@@ -168,4 +207,5 @@ def run_layer4(image_input: Union[Image.Image, str], weights_path: str = "") -> 
 
 # Alias for compatibility with aggregator imports
 run_layer4_analysis = run_layer4
+
 

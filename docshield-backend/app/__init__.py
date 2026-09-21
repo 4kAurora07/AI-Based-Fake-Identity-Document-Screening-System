@@ -74,6 +74,24 @@ def create_app(config_name: str = None) -> Flask:
         from app.models.scan import ScanResult
         db.create_all()
 
+    # Pre-warm ML models at startup to eliminate cold-start penalty on first request.
+    # Without this, the first /api/analyze call pays ~11s loading PyTorch + EasyOCR + model weights.
+    if not app.config.get("TESTING"):
+        app.logger.info("Pre-warming ML models at startup...")
+        try:
+            from app.ml.model_loader import get_ai_detector
+            get_ai_detector()
+            app.logger.info("EfficientNet-B0 detector loaded successfully.")
+        except Exception as e:
+            app.logger.warning("EfficientNet-B0 pre-warm skipped: %s", str(e))
+
+        try:
+            from app.layers.layer2_ocr import get_easyocr_reader
+            get_easyocr_reader()
+            app.logger.info("EasyOCR reader initialized successfully.")
+        except Exception as e:
+            app.logger.warning("EasyOCR pre-warm skipped: %s", str(e))
+
     return app
 
 

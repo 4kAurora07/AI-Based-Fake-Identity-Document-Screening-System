@@ -140,7 +140,7 @@ def analyze_document():
             form_data=dict(request.form),
             tesseract_cmd=tesseract_cmd,
             model_weights_path=weights_path,
-            timeout_seconds=25.0,
+            timeout_seconds=20.0,
             raw_bytes=raw_bytes,
             filename=file_obj.filename or "uploaded_document.jpg",
             secondary_image=sec_clean_img,

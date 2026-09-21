@@ -232,7 +232,11 @@ export const api = {
         body: formData
       })
     } catch (networkErr) {
-      throw new Error('Backend screening engine is unreachable. Please ensure docshield-backend is running on port 5000.')
+      const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+      const msg = isLocal
+        ? 'Backend screening engine is unreachable. Please ensure docshield-backend is running on port 5000.'
+        : 'Backend screening engine is unreachable or warming up. Please wait a few seconds and try again.'
+      throw new Error(msg)
     }
 
     // Save session token from server
@@ -240,6 +244,9 @@ export const api = {
 
     if (!response.ok) {
       let errorMsg = `Screening failed with HTTP ${response.status}`
+      if (response.status === 502 || response.status === 504) {
+        errorMsg = 'Backend service timed out or is restarting. Please wait a few moments and try again.'
+      }
       try {
         const errJson = await response.json()
         errorMsg = errJson.message || errJson.error || errorMsg
