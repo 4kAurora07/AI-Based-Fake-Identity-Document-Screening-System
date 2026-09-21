@@ -99,7 +99,7 @@ def execute_parallel_analysis(
     form_data: Optional[Dict[str, Any]] = None,
     tesseract_cmd: str = "",
     model_weights_path: str = "",
-    timeout_seconds: float = 18.0,
+    timeout_seconds: float = 9.5,
     raw_bytes: Optional[bytes] = None,
     filename: str = "",
     secondary_image: Optional[Image.Image] = None,
