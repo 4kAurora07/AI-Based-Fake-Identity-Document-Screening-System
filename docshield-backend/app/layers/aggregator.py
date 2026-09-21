@@ -99,7 +99,7 @@ def execute_parallel_analysis(
     form_data: Optional[Dict[str, Any]] = None,
     tesseract_cmd: str = "",
     model_weights_path: str = "",
-    timeout_seconds: float = 25.0,
+    timeout_seconds: float = 18.0,
     raw_bytes: Optional[bytes] = None,
     filename: str = "",
     secondary_image: Optional[Image.Image] = None,
@@ -144,22 +144,30 @@ def execute_parallel_analysis(
 
         future_source = executor.submit(_run_source_verification)
 
-        # Collect results with timeout safety
-        try:
-            res_l1 = future_l1.result(timeout=timeout_seconds)
-        except Exception as e:
-            logger.error("Layer 1 execution failed: %s", str(e), exc_info=True)
-            res_l1 = {
+        deadline = start_time + timeout_seconds
+
+        def _get_result(fut, default_val, task_name="Task"):
+            try:
+                remaining = max(0.1, deadline - time.perf_counter())
+                return fut.result(timeout=remaining)
+            except Exception as e:
+                logger.error("%s execution failed or reached deadline: %s", task_name, str(e))
+                return default_val
+
+        # Collect results with strict shared deadline
+        res_l1 = _get_result(
+            future_l1,
+            {
                 "status": "inconclusive",
                 "confidence": 50.0,
                 "details": {"is_emulator": False, "is_virtual_camera": False, "is_injection_attack": False, "timestamp_skew_seconds": 0.0, "client_entropy_score": 50.0, "flags": ["Layer 1 timeout/error"]},
-            }
+            },
+            "Layer 1",
+        )
 
-        try:
-            res_l2 = future_l2.result(timeout=timeout_seconds)
-        except Exception as e:
-            logger.error("Layer 2 execution failed: %s", str(e), exc_info=True)
-            res_l2 = {
+        res_l2 = _get_result(
+            future_l2,
+            {
                 "status": "inconclusive",
                 "confidence": 50.0,
                 "document_type": "unknown",
@@ -169,8 +177,10 @@ def execute_parallel_analysis(
                 "mrz_format": None,
                 "barcode_detected": False,
                 "cross_check_matches": True,
-                "anomalies": ["Layer 2 processing error: " + (str(e) or "Timeout")],
-            }
+                "anomalies": ["Layer 2 processing deadline reached"],
+            },
+            "Layer 2",
+        )
 
         # Submit dependent tasks as soon as Layer 2 results are available
         def _run_visual_forensics():
@@ -206,11 +216,9 @@ def execute_parallel_analysis(
         future_visual = executor.submit(_run_visual_forensics)
         future_barcode = executor.submit(_run_barcode_crosscheck)
 
-        try:
-            res_l3 = future_l3.result(timeout=timeout_seconds)
-        except Exception as e:
-            logger.error("Layer 3 execution failed: %s", str(e))
-            res_l3 = {
+        res_l3 = _get_result(
+            future_l3,
+            {
                 "status": "inconclusive",
                 "confidence": 50.0,
                 "ela_anomaly_score": 0.0,
@@ -218,15 +226,15 @@ def execute_parallel_analysis(
                 "copy_move_matches_count": 0,
                 "frequency_anomaly_score": 0.0,
                 "photo_splicing_detected": False,
-                "anomalies": ["Layer 3 processing error"],
+                "anomalies": ["Layer 3 processing error or deadline reached"],
                 "ela_mask": None,
-            }
+            },
+            "Layer 3",
+        )
 
-        try:
-            res_l4 = future_l4.result(timeout=timeout_seconds)
-        except Exception as e:
-            logger.error("Layer 4 execution failed: %s", str(e))
-            res_l4 = {
+        res_l4 = _get_result(
+            future_l4,
+            {
                 "status": "inconclusive",
                 "confidence": 50.0,
                 "model": "EfficientNet-B0",
@@ -234,58 +242,59 @@ def execute_parallel_analysis(
                 "genuine_probability": 50.0,
                 "heatmap_generated": False,
                 "heatmap_mask": None,
-            }
+            },
+            "Layer 4",
+        )
 
-        try:
-            res_face = future_face.result(timeout=timeout_seconds)
-        except Exception as e:
-            logger.error("Face matcher execution failed: %s", str(e))
-            res_face = {
+        res_face = _get_result(
+            future_face,
+            {
                 "performed": False,
                 "status": "UNABLE TO DETERMINE",
                 "similarity_score": 0.0,
                 "distance": None,
-                "details": f"Biometric face matching error: {str(e)}",
-                "limitations": "Face matching encountered an execution error.",
-            }
+                "details": "Face matching deadline reached or unperformed.",
+                "limitations": "Face matching timed out or encountered an error.",
+            },
+            "Face Matcher",
+        )
 
-        # Collect the parallel post-processing results
-        try:
-            res_source = future_source.result(timeout=timeout_seconds)
-        except Exception as e:
-            logger.error("Source verification future error: %s", str(e))
-            res_source = {
+        res_source = _get_result(
+            future_source,
+            {
                 "status": "UNABLE TO DETERMINE",
                 "confidence": 50.0,
-                "description": f"Source inspection error: {str(e)}",
+                "description": "Source inspection deadline reached.",
                 "evidence_signals": [],
-                "limitations": "Error analyzing document source.",
-            }
+                "limitations": "Error or deadline analyzing document source.",
+            },
+            "Source Verifier",
+        )
 
-        try:
-            res_visual = future_visual.result(timeout=timeout_seconds)
-        except Exception as e:
-            logger.error("Visual forensics future error: %s", str(e))
-            res_visual = {
+        res_visual = _get_result(
+            future_visual,
+            {
                 "status": "PASS",
                 "confidence": 60.0,
                 "evidence": [],
                 "limitations": "Visual forensics inspection completed with fallback defaults.",
-            }
+            },
+            "Visual Forensics",
+        )
 
-        try:
-            res_barcode = future_barcode.result(timeout=timeout_seconds)
-        except Exception as e:
-            logger.error("Barcode cross-check future error: %s", str(e))
-            res_barcode = {
+        res_barcode = _get_result(
+            future_barcode,
+            {
                 "status": "NOT DETECTED",
                 "confidence": 50.0,
                 "barcode_detected": False,
-                "details": f"Barcode cross-check error: {str(e)}",
+                "details": "Barcode cross-check completed with fallback defaults.",
                 "matched_fields": [],
                 "mismatched_fields": [],
-                "limitations": "Barcode decoder encountered an error.",
-            }
+                "limitations": "Barcode decoder encountered an error or deadline.",
+            },
+            "Barcode Cross-Check",
+        )
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000.0
 
