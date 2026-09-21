@@ -227,7 +227,8 @@ class OCRForensicExtractor:
             new_h = max(1, int(h * scale))
             ocr_img = ocr_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
 
-        # 1. Fast, low-memory engine: Tesseract (C++ runtime, <20MB RAM, sub-second execution)
+        # 1. Primary Engine: Tesseract (C++ runtime, <20MB RAM, sub-second execution)
+        tesseract_available = False
         if pytesseract is not None:
             if custom_cmd:
                 pytesseract.pytesseract.tesseract_cmd = custom_cmd
@@ -238,6 +239,12 @@ class OCRForensicExtractor:
                     if os.path.exists(win_path):
                         pytesseract.pytesseract.tesseract_cmd = win_path
                         break
+            import shutil
+            tess_bin = pytesseract.pytesseract.tesseract_cmd
+            if shutil.which(tess_bin) or (tess_bin and os.path.exists(tess_bin)):
+                tesseract_available = True
+
+        if tesseract_available:
             try:
                 try:
                     tess_text = pytesseract.image_to_string(ocr_img, lang="eng+hin") or ""
@@ -247,14 +254,31 @@ class OCRForensicExtractor:
                     except Exception:
                         tess_text = ""
                 tess_lines = [l.strip() for l in tess_text.split("\n") if l.strip()]
-                if len(tess_lines) >= 3:
-                    raw_text = tess_text
-                    lines = tess_lines
-            except Exception as e:
-                logger.debug("Tesseract OCR initial pass: %s", str(e))
 
-        # 2. Secondary Engine: EasyOCR (runs if Tesseract found insufficient lines)
-        if not raw_text or len(lines) < 3:
+                # Pass 2: Adaptive CLAHE enhancement if initial pass detected sparse text
+                if len(tess_lines) < 2:
+                    try:
+                        import cv2
+                        img_np = np.array(ocr_img)
+                        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                        enhanced = clahe.apply(gray)
+                        tess_text2 = pytesseract.image_to_string(enhanced, lang="eng") or ""
+                        tess_lines2 = [l.strip() for l in tess_text2.split("\n") if l.strip()]
+                        if len(tess_lines2) > len(tess_lines):
+                            tess_text = tess_text2
+                            tess_lines = tess_lines2
+                    except Exception:
+                        pass
+
+                raw_text = tess_text
+                lines = tess_lines
+            except Exception as e:
+                logger.debug("Tesseract OCR pass: %s", str(e))
+
+        # 2. Secondary Engine: EasyOCR (runs strictly if Tesseract binary is absent on host)
+        # Prevents container OOM SIGKILL on memory-constrained (512MB) cloud platforms like Render
+        if not tesseract_available and (not raw_text or len(lines) < 2):
             reader = get_easyocr_reader()
             if reader is not None:
                 try:
