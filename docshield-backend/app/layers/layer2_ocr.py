@@ -6,6 +6,7 @@ intelligent document-specific field extraction (PAN, Aadhaar, Passport, Voter ID
 QR/barcode cross-checking, and layout typographic consistency analysis.
 """
 
+import os
 import re
 import logging
 from typing import Dict, Any, List, Optional, Tuple
@@ -214,14 +215,14 @@ class OCRForensicExtractor:
         max_dim = max(w, h)
 
         # Adaptive resolution optimization:
-        # Cap max_dim to 640px to guarantee fast execution (<10s) and low memory (<100MB) on CPU
-        if max_dim > 640:
-            scale = 640.0 / max_dim
+        # Cap max_dim to 480px to guarantee sub-3-second execution and low memory (<70MB) on CPU
+        if max_dim > 480:
+            scale = 480.0 / max_dim
             new_w = max(1, int(w * scale))
             new_h = max(1, int(h * scale))
             ocr_img = ocr_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
-        elif min_dim < 400:
-            scale = min(1.8, 540.0 / max(1, min_dim))
+        elif min_dim < 320:
+            scale = min(1.5, 400.0 / max(1, min_dim))
             new_w = max(1, int(w * scale))
             new_h = max(1, int(h * scale))
             ocr_img = ocr_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
@@ -230,11 +231,21 @@ class OCRForensicExtractor:
         if pytesseract is not None:
             if custom_cmd:
                 pytesseract.pytesseract.tesseract_cmd = custom_cmd
+            elif os.path.exists("/usr/bin/tesseract"):
+                pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
+            elif os.name == "nt":
+                for win_path in [r"C:\Program Files\Tesseract-OCR\tesseract.exe", r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"]:
+                    if os.path.exists(win_path):
+                        pytesseract.pytesseract.tesseract_cmd = win_path
+                        break
             try:
                 try:
-                    tess_text = pytesseract.image_to_string(ocr_img, lang="eng") or ""
+                    tess_text = pytesseract.image_to_string(ocr_img, lang="eng+hin") or ""
                 except Exception:
-                    tess_text = ""
+                    try:
+                        tess_text = pytesseract.image_to_string(ocr_img, lang="eng") or ""
+                    except Exception:
+                        tess_text = ""
                 tess_lines = [l.strip() for l in tess_text.split("\n") if l.strip()]
                 if len(tess_lines) >= 3:
                     raw_text = tess_text

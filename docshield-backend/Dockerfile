@@ -8,6 +8,7 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     FLASK_ENV=production \
+    TESSERACT_CMD=/usr/bin/tesseract \
     PORT=5000
 
 # Install system runtime dependencies for Tesseract, pyzbar, and headless OpenCV

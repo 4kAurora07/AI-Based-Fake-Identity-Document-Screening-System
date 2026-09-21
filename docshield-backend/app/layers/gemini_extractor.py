@@ -290,13 +290,15 @@ def extract_fields_with_ai(
             return result
         return {}
 
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(_do_extract)
-            return fut.result(timeout=2.5)
+        fut = ex.submit(_do_extract)
+        return fut.result(timeout=1.8)
     except Exception as e:
         logger.info("Cloud LLM extraction skipped or timed out (%s) — using local OCR.", str(e))
         return {}
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
 
 def merge_ai_and_ocr_fields(
