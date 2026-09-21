@@ -4,6 +4,8 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  VITE_API_BASE_URL = "https://docshield-backend-pqi5.onrender.com"
+
 
 # 1. API Reverse Proxy (Bypasses CORS by proxying all /api/* requests to Render backend)
 [[redirects]]
