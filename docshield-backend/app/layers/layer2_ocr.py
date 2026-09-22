@@ -247,10 +247,10 @@ class OCRForensicExtractor:
         if tesseract_available:
             try:
                 try:
-                    tess_text = pytesseract.image_to_string(ocr_img, lang="eng") or ""
+                    tess_text = pytesseract.image_to_string(ocr_img, lang="eng", timeout=3) or ""
                 except Exception:
                     try:
-                        tess_text = pytesseract.image_to_string(ocr_img, lang="eng+hin") or ""
+                        tess_text = pytesseract.image_to_string(ocr_img, lang="eng+hin", timeout=3) or ""
                     except Exception:
                         tess_text = ""
                 tess_lines = [l.strip() for l in tess_text.split("\n") if l.strip()]
@@ -263,7 +263,7 @@ class OCRForensicExtractor:
                         gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
                         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
                         enhanced = clahe.apply(gray)
-                        tess_text2 = pytesseract.image_to_string(enhanced, lang="eng") or ""
+                        tess_text2 = pytesseract.image_to_string(enhanced, lang="eng", timeout=3) or ""
                         tess_lines2 = [l.strip() for l in tess_text2.split("\n") if l.strip()]
                         if len(tess_lines2) > len(tess_lines):
                             tess_text = tess_text2
@@ -276,9 +276,8 @@ class OCRForensicExtractor:
             except Exception as e:
                 logger.debug("Tesseract OCR pass: %s", str(e))
 
-        # 2. Secondary Engine: EasyOCR (runs strictly if Tesseract binary is absent on host)
-        # Prevents container OOM SIGKILL on memory-constrained (512MB) cloud platforms like Render
-        if not tesseract_available and (not raw_text or len(lines) < 2):
+        # 2. Secondary Engine: EasyOCR (opt-in only to prevent container OOM SIGKILL on 512MB RAM)
+        if not tesseract_available and os.getenv("ENABLE_EASYOCR", "false").lower() == "true":
             reader = get_easyocr_reader()
             if reader is not None:
                 try:
