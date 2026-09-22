@@ -108,196 +108,138 @@ def execute_parallel_analysis(
     """Executes all core forensic, OCR, and verification layers concurrently."""
     start_time = time.perf_counter()
 
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+    # Step 1: Layer 1 Behavioral Analysis
     try:
-        future_l1 = executor.submit(run_layer1_analysis, image.copy(), headers, form_data)
-        future_l2 = executor.submit(run_layer2_analysis, image.copy(), tesseract_cmd)
-        future_l3 = executor.submit(run_layer3_analysis, image.copy())
-        future_l4 = executor.submit(run_layer4_analysis, image.copy(), model_weights_path)
-        future_face = executor.submit(CrossDocumentFaceMatcher.compare_documents, image.copy(), secondary_image.copy() if secondary_image else None)
+        res_l1 = run_layer1_analysis(image, headers, form_data)
+    except Exception as e:
+        logger.error("Layer 1 execution error: %s", repr(e))
+        res_l1 = {
+            "status": "inconclusive",
+            "confidence": 50.0,
+            "details": {"is_emulator": False, "is_virtual_camera": False, "is_injection_attack": False, "timestamp_skew_seconds": 0.0, "client_entropy_score": 50.0, "flags": ["Layer 1 error"]},
+        }
 
-        # Document Source Verification has no layer dependencies — run it in parallel too
-        def _run_source_verification():
-            try:
-                if is_pdf and raw_bytes:
-                    return DocumentSourceVerifier.inspect_pdf_source(raw_bytes, filename=filename)
-                elif raw_bytes:
-                    return DocumentSourceVerifier.inspect_image_source(
-                        raw_bytes, filename=filename, width=image.width, height=image.height
-                    )
-                else:
-                    return {
-                        "status": "UNABLE TO DETERMINE",
-                        "confidence": 50.0,
-                        "description": "Raw container stream not provided for metadata analysis",
-                        "evidence_signals": [],
-                        "limitations": "Requires un-sanitized byte stream to inspect EXIF headers.",
-                    }
-            except Exception as e:
-                logger.error("Document Source verification error: %s", str(e))
-                return {
-                    "status": "UNABLE TO DETERMINE",
-                    "confidence": 50.0,
-                    "description": f"Source inspection error: {str(e)}",
-                    "evidence_signals": [],
-                    "limitations": "Error analyzing document source.",
-                }
+    # Step 2: Layer 2 OCR & Structural Extraction
+    try:
+        res_l2 = run_layer2_analysis(image, tesseract_cmd)
+    except Exception as e:
+        logger.error("Layer 2 execution error: %s", repr(e))
+        res_l2 = {
+            "status": "inconclusive",
+            "confidence": 50.0,
+            "document_type": "unknown",
+            "fields": {"document_type": "unknown"},
+            "mrz_detected": False,
+            "mrz_checksum_valid": None,
+            "mrz_format": None,
+            "barcode_detected": False,
+            "cross_check_matches": True,
+            "anomalies": ["Layer 2 processing error"],
+        }
 
-        future_source = executor.submit(_run_source_verification)
+    # Step 3: Layer 3 Classical & Spectral Forensics
+    try:
+        res_l3 = run_layer3_analysis(image)
+    except Exception as e:
+        logger.error("Layer 3 execution error: %s", repr(e))
+        res_l3 = {
+            "status": "inconclusive",
+            "confidence": 50.0,
+            "ela_anomaly_score": 0.0,
+            "copy_move_detected": False,
+            "copy_move_matches_count": 0,
+            "frequency_anomaly_score": 0.0,
+            "photo_splicing_detected": False,
+            "anomalies": ["Layer 3 processing error"],
+            "ela_mask": None,
+        }
 
-        deadline = start_time + timeout_seconds
+    # Step 4: Layer 4 EfficientNet-B0 Deep Learning Detection
+    try:
+        res_l4 = run_layer4_analysis(image, model_weights_path)
+    except Exception as e:
+        logger.error("Layer 4 execution error: %s", repr(e))
+        res_l4 = {
+            "status": "inconclusive",
+            "confidence": 50.0,
+            "model": "EfficientNet-B0",
+            "forgery_probability": 50.0,
+            "genuine_probability": 50.0,
+            "heatmap_generated": False,
+            "heatmap_mask": None,
+        }
 
-        def _get_result(fut, default_val, task_name="Task"):
-            try:
-                remaining = max(0.1, deadline - time.perf_counter())
-                return fut.result(timeout=remaining)
-            except Exception as e:
-                logger.error("%s execution failed or reached deadline (%s): %s", task_name, type(e).__name__, repr(e))
-                return default_val
-
-        # Collect results with strict shared deadline
-        res_l1 = _get_result(
-            future_l1,
-            {
-                "status": "inconclusive",
-                "confidence": 50.0,
-                "details": {"is_emulator": False, "is_virtual_camera": False, "is_injection_attack": False, "timestamp_skew_seconds": 0.0, "client_entropy_score": 50.0, "flags": ["Layer 1 timeout/error"]},
-            },
-            "Layer 1",
+    # Step 5: Cross-Document Face Matcher
+    try:
+        res_face = CrossDocumentFaceMatcher.compare_documents(
+            image, secondary_image if secondary_image else None
         )
+    except Exception as e:
+        logger.error("Face matcher execution error: %s", repr(e))
+        res_face = {
+            "performed": False,
+            "status": "UNABLE TO DETERMINE",
+            "similarity_score": 0.0,
+            "distance": None,
+            "details": "Face matching unperformed.",
+            "limitations": "Face matching error.",
+        }
 
-        res_l2 = _get_result(
-            future_l2,
-            {
-                "status": "inconclusive",
-                "confidence": 50.0,
-                "document_type": "unknown",
-                "fields": {"document_type": "unknown"},
-                "mrz_detected": False,
-                "mrz_checksum_valid": None,
-                "mrz_format": None,
-                "barcode_detected": False,
-                "cross_check_matches": True,
-                "anomalies": ["Layer 2 processing deadline reached"],
-            },
-            "Layer 2",
-        )
-
-        # Submit dependent tasks as soon as Layer 2 results are available
-        def _run_visual_forensics():
-            try:
-                ocr_lines = res_l2.get("fields", {}).get("raw_lines", [])
-                return VisualForensicsEngine.analyze_layout_consistency(image, ocr_lines=ocr_lines)
-            except Exception as e:
-                logger.error("Visual forensics error: %s", str(e))
-                return {
-                    "status": "PASS",
-                    "confidence": 60.0,
-                    "evidence": [],
-                    "limitations": "Visual forensics inspection completed with fallback defaults.",
-                }
-
-        def _run_barcode_crosscheck():
-            try:
-                ocr_fields = res_l2.get("fields", {})
-                doc_type = res_l2.get("document_type", "unknown")
-                return BarcodeCrossCheckEngine.cross_check(image, ocr_fields, doc_type=doc_type)
-            except Exception as e:
-                logger.error("Barcode cross-check error: %s", str(e))
-                return {
-                    "status": "NOT DETECTED",
-                    "confidence": 50.0,
-                    "barcode_detected": False,
-                    "details": f"Barcode cross-check error: {str(e)}",
-                    "matched_fields": [],
-                    "mismatched_fields": [],
-                    "limitations": "Barcode decoder encountered an error.",
-                }
-
-        future_visual = executor.submit(_run_visual_forensics)
-        future_barcode = executor.submit(_run_barcode_crosscheck)
-
-        res_l3 = _get_result(
-            future_l3,
-            {
-                "status": "inconclusive",
-                "confidence": 50.0,
-                "ela_anomaly_score": 0.0,
-                "copy_move_detected": False,
-                "copy_move_matches_count": 0,
-                "frequency_anomaly_score": 0.0,
-                "photo_splicing_detected": False,
-                "anomalies": ["Layer 3 processing error or deadline reached"],
-                "ela_mask": None,
-            },
-            "Layer 3",
-        )
-
-        res_l4 = _get_result(
-            future_l4,
-            {
-                "status": "inconclusive",
-                "confidence": 50.0,
-                "model": "EfficientNet-B0",
-                "forgery_probability": 50.0,
-                "genuine_probability": 50.0,
-                "heatmap_generated": False,
-                "heatmap_mask": None,
-            },
-            "Layer 4",
-        )
-
-        res_face = _get_result(
-            future_face,
-            {
-                "performed": False,
-                "status": "UNABLE TO DETERMINE",
-                "similarity_score": 0.0,
-                "distance": None,
-                "details": "Face matching deadline reached or unperformed.",
-                "limitations": "Face matching timed out or encountered an error.",
-            },
-            "Face Matcher",
-        )
-
-        res_source = _get_result(
-            future_source,
-            {
+    # Step 6: Document Source Verification
+    try:
+        if is_pdf and raw_bytes:
+            res_source = DocumentSourceVerifier.inspect_pdf_source(raw_bytes, filename=filename)
+        elif raw_bytes:
+            res_source = DocumentSourceVerifier.inspect_image_source(
+                raw_bytes, filename=filename, width=image.width, height=image.height
+            )
+        else:
+            res_source = {
                 "status": "UNABLE TO DETERMINE",
                 "confidence": 50.0,
-                "description": "Source inspection deadline reached.",
+                "description": "Raw container stream not provided for metadata analysis",
                 "evidence_signals": [],
-                "limitations": "Error or deadline analyzing document source.",
-            },
-            "Source Verifier",
-        )
+                "limitations": "Requires un-sanitized byte stream to inspect EXIF headers.",
+            }
+    except Exception as e:
+        logger.error("Document Source verification error: %s", repr(e))
+        res_source = {
+            "status": "UNABLE TO DETERMINE",
+            "confidence": 50.0,
+            "description": f"Source inspection error: {str(e)}",
+            "evidence_signals": [],
+            "limitations": "Error analyzing document source.",
+        }
 
-        res_visual = _get_result(
-            future_visual,
-            {
-                "status": "PASS",
-                "confidence": 60.0,
-                "evidence": [],
-                "limitations": "Visual forensics inspection completed with fallback defaults.",
-            },
-            "Visual Forensics",
-        )
+    # Step 7: Visual Forensics (uses OCR lines from Layer 2)
+    try:
+        ocr_lines = res_l2.get("fields", {}).get("raw_lines", [])
+        res_visual = VisualForensicsEngine.analyze_layout_consistency(image, ocr_lines=ocr_lines)
+    except Exception as e:
+        logger.error("Visual forensics error: %s", repr(e))
+        res_visual = {
+            "status": "PASS",
+            "confidence": 60.0,
+            "evidence": [],
+            "limitations": "Visual forensics inspection completed with fallback defaults.",
+        }
 
-        res_barcode = _get_result(
-            future_barcode,
-            {
-                "status": "NOT DETECTED",
-                "confidence": 50.0,
-                "barcode_detected": False,
-                "details": "Barcode cross-check completed with fallback defaults.",
-                "matched_fields": [],
-                "mismatched_fields": [],
-                "limitations": "Barcode decoder encountered an error or deadline.",
-            },
-            "Barcode Cross-Check",
-        )
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+    # Step 8: Barcode / QR Cross-Check (uses OCR fields from Layer 2)
+    try:
+        ocr_fields = res_l2.get("fields", {})
+        doc_type = res_l2.get("document_type", "unknown")
+        res_barcode = BarcodeCrossCheckEngine.cross_check(image, ocr_fields, doc_type=doc_type)
+    except Exception as e:
+        logger.error("Barcode cross-check error: %s", repr(e))
+        res_barcode = {
+            "status": "NOT DETECTED",
+            "confidence": 50.0,
+            "barcode_detected": False,
+            "details": f"Barcode cross-check error: {str(e)}",
+            "matched_fields": [],
+            "mismatched_fields": [],
+            "limitations": "Barcode decoder encountered an error.",
+        }
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000.0
 
