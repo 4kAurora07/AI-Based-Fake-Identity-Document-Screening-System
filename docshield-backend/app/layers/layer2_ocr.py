@@ -819,9 +819,10 @@ def run_layer2_analysis(image: Image.Image, custom_tesseract_cmd: str = "") -> D
     # 4. Extract visual fields via regex/heuristic OCR
     ocr_fields = OCRForensicExtractor.extract_structural_fields(text, lines, doc_type=doc_type)
 
-    # 5. Gemini Vision AI field extraction — skipped if MRZ already extracted 100% verified fields
+    # 5. Gemini Vision AI field extraction — only fallback if MRZ and regex OCR found insufficient fields
     ai_fields = {}
-    if not mrz_info.get("mrz_detected"):
+    has_essential_fields = bool(ocr_fields.get("document_number") or ocr_fields.get("holder_name"))
+    if not mrz_info.get("mrz_detected") and not has_essential_fields:
         try:
             from app.layers.gemini_extractor import extract_fields_with_ai, merge_ai_and_ocr_fields
             ai_fields = extract_fields_with_ai(image, ocr_text_hint=text)

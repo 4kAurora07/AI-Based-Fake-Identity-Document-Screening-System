@@ -293,7 +293,7 @@ def extract_fields_with_ai(
     ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
         fut = ex.submit(_do_extract)
-        return fut.result(timeout=1.8)
+        return fut.result(timeout=0.5)
     except Exception as e:
         logger.info("Cloud LLM extraction skipped or timed out (%s) — using local OCR.", str(e))
         return {}
