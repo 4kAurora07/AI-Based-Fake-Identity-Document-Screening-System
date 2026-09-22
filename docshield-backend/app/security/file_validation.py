@@ -173,6 +173,13 @@ def validate_and_reencode_image(
             # Convert to standard RGB (drops dangerous color profiles, alpha tricks, paletted code)
             clean_image = oriented_img.convert("RGB")
 
+            # Auto-downscale large images to max 1024px for lightning-fast forensic processing (<1.5s)
+            if max(width, height) > 1024:
+                scale = 1024.0 / float(max(width, height))
+                new_w = max(1, int(width * scale))
+                new_h = max(1, int(height * scale))
+                clean_image = clean_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
+
     except Image.DecompressionBombError:
         raise FileValidationError(
             "Decompression bomb detected: Image exceeds safe pixel count threshold."

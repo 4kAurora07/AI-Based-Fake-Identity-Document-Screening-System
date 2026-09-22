@@ -53,4 +53,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # --preload: Loads app and ML models once before forking, saving RAM and eliminating per-worker cold start
 # --threads 2: Reduced from 4 to lower memory pressure on Render's 512MB free tier
 # --timeout 120: Provides sufficient headroom for cold start without premature worker termination
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 1 --threads 2 --timeout 120 --preload wsgi:app"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 1 --threads 2 --timeout 60 --max-requests 50 --max-requests-jitter 10 wsgi:app"]

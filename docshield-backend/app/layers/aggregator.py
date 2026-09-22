@@ -85,12 +85,12 @@ def generate_heatmap_overlay(
     mask_weight = (norm_map / 255.0)[:, :, np.newaxis]
     blended = (orig_np * (1.0 - (mask_weight * alpha)) + heatmap_colored * (mask_weight * alpha)).astype(np.uint8)
 
-    # Encode to base64 PNG
+    # Encode to base64 JPEG (fast, lightweight, web-compatible)
     pil_overlay = Image.fromarray(blended)
     buf = io.BytesIO()
-    pil_overlay.save(buf, format="PNG", optimize=True)
+    pil_overlay.save(buf, format="JPEG", quality=85)
     b64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
-    return f"data:image/png;base64,{b64_str}"
+    return f"data:image/jpeg;base64,{b64_str}"
 
 
 def execute_parallel_analysis(
@@ -99,7 +99,7 @@ def execute_parallel_analysis(
     form_data: Optional[Dict[str, Any]] = None,
     tesseract_cmd: str = "",
     model_weights_path: str = "",
-    timeout_seconds: float = 9.5,
+    timeout_seconds: float = 5.0,
     raw_bytes: Optional[bytes] = None,
     filename: str = "",
     secondary_image: Optional[Image.Image] = None,
@@ -108,7 +108,7 @@ def execute_parallel_analysis(
     """Executes all core forensic, OCR, and verification layers concurrently."""
     start_time = time.perf_counter()
 
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
     try:
         future_l1 = executor.submit(run_layer1_analysis, image.copy(), headers, form_data)
         future_l2 = executor.submit(run_layer2_analysis, image.copy(), tesseract_cmd)
