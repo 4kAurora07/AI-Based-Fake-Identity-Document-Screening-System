@@ -193,7 +193,7 @@ def validate_and_reencode_image(
 
     # Step 4: Re-encode to clean in-memory buffer (completely strips EXIF and embedded steganography/payloads)
     output_buffer = io.BytesIO()
-    clean_image.save(output_buffer, format="JPEG", quality=95, optimize=True)
+    clean_image.save(output_buffer, format="JPEG", quality=90)
     clean_bytes = output_buffer.getvalue()
 
     return clean_image, clean_bytes, "JPEG"

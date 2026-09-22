@@ -84,14 +84,14 @@ _USER_PROMPT = (
 # Image helpers
 # ---------------------------------------------------------------------------
 
-def _to_jpeg_bytes(image: Image.Image, max_dim: int = 1568) -> bytes:
+def _to_jpeg_bytes(image: Image.Image, max_dim: int = 1280) -> bytes:
     buf = io.BytesIO()
     rgb = image.convert("RGB")
     w, h = rgb.size
     if max(w, h) > max_dim:
         scale = max_dim / max(w, h)
-        rgb = rgb.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
-    rgb.save(buf, format="JPEG", quality=88, optimize=True)
+        rgb = rgb.resize((int(w * scale), int(h * scale)), Image.Resampling.BILINEAR)
+    rgb.save(buf, format="JPEG", quality=85)
     return buf.getvalue()
 
 
@@ -150,7 +150,7 @@ def _normalize(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 # ---------------------------------------------------------------------------
-# Provider 1: Gemini 2.5 Flash (google-genai SDK)
+# Provider 1: Gemini 2.0 / 1.5 Flash (google-genai SDK)
 # ---------------------------------------------------------------------------
 
 def _init_gemini() -> Optional[Any]:
@@ -182,7 +182,7 @@ def _extract_gemini(image: Image.Image, ocr_hint: str = "") -> Optional[Dict[str
         if ocr_hint and len(ocr_hint.strip()) > 20:
             prompt_parts.append(f"\nOCR context (cross-reference only):\n{ocr_hint[:800]}")
 
-        candidate_models = ["gemini-3.6-flash"]
+        candidate_models = ["gemini-2.0-flash", "gemini-1.5-flash"]
         for model_name in candidate_models:
             try:
                 response = client.models.generate_content(
@@ -268,37 +268,43 @@ def _extract_groq(image: Image.Image, ocr_hint: str = "") -> Optional[Dict[str, 
 # Public API
 # ---------------------------------------------------------------------------
 
-import concurrent.futures
+import threading
+import queue
 
 def extract_fields_with_ai(
     image: Image.Image,
     ocr_text_hint: str = "",
 ) -> Dict[str, Any]:
     """
-    Extract structured identity fields from a document image with a strict 2.5s ceiling.
-    Tries Gemini, falls back to Groq, then returns {} gracefully. Never blocks or raises.
+    Extract structured identity fields with a strict daemon thread ceiling.
+    Returns {} gracefully if unavailable or timed out. Never blocks or raises.
     """
-    def _do_extract():
-        result = _extract_gemini(image, ocr_text_hint)
-        if result:
-            result["ai_provider"] = "gemini"
-            return result
+    res_q: queue.Queue = queue.Queue(maxsize=1)
 
-        result = _extract_groq(image, ocr_text_hint)
-        if result:
-            result["ai_provider"] = "groq-llama-3.2-vision"
-            return result
-        return {}
+    def _worker():
+        try:
+            result = _extract_gemini(image, ocr_text_hint)
+            if result:
+                result["ai_provider"] = "gemini"
+                res_q.put(result)
+                return
 
-    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            result = _extract_groq(image, ocr_text_hint)
+            if result:
+                result["ai_provider"] = "groq-llama-3.2-vision"
+                res_q.put(result)
+                return
+            res_q.put({})
+        except Exception:
+            res_q.put({})
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
     try:
-        fut = ex.submit(_do_extract)
-        return fut.result(timeout=0.5)
-    except Exception as e:
-        logger.info("Cloud LLM extraction skipped or timed out (%s) — using local OCR.", str(e))
+        return res_q.get(timeout=1.5)
+    except Exception:
+        logger.info("Cloud LLM extraction timed out or skipped — using local OCR.")
         return {}
-    finally:
-        ex.shutdown(wait=False, cancel_futures=True)
 
 
 def merge_ai_and_ocr_fields(

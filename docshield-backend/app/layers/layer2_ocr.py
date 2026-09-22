@@ -820,16 +820,17 @@ def run_layer2_analysis(image: Image.Image, custom_tesseract_cmd: str = "") -> D
     # 4. Extract visual fields via regex/heuristic OCR
     ocr_fields = OCRForensicExtractor.extract_structural_fields(text, lines, doc_type=doc_type)
 
-    # 5. Gemini Vision AI field extraction — only fallback if MRZ and regex OCR found insufficient fields
+    # 5. Gemini Vision AI field extraction — opt-in only, bypassed in real-time screening to guarantee <1.5s latency
     ai_fields = {}
-    has_essential_fields = bool(ocr_fields.get("document_number") or ocr_fields.get("holder_name"))
-    if not mrz_info.get("mrz_detected") and not has_essential_fields:
-        try:
-            from app.layers.gemini_extractor import extract_fields_with_ai, merge_ai_and_ocr_fields
-            ai_fields = extract_fields_with_ai(image, ocr_text_hint=text)
-        except Exception as ai_err:
-            logger.warning("AI extraction import/call error: %s", ai_err)
-            ai_fields = {}
+    if os.environ.get("ENABLE_CLOUD_AI_EXTRACTION", "false").lower() == "true":
+        has_essential_fields = bool(ocr_fields.get("document_number") or ocr_fields.get("holder_name"))
+        if not mrz_info.get("mrz_detected") and not has_essential_fields:
+            try:
+                from app.layers.gemini_extractor import extract_fields_with_ai
+                ai_fields = extract_fields_with_ai(image, ocr_text_hint=text)
+            except Exception as ai_err:
+                logger.warning("AI extraction import/call error: %s", ai_err)
+                ai_fields = {}
 
     # 6. Merge AI + OCR fields (AI enhances OCR, not replaces it)
     ai_confidence = ai_fields.get("ai_confidence", "medium") if ai_fields else "low"

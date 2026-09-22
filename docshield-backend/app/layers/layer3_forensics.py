@@ -72,8 +72,8 @@ class CopyMoveDetector:
         else:
             gray = image_np
 
-        # Initialize ORB detector
-        orb = cv2.ORB_create(nfeatures=1500)
+        # Initialize ORB detector (600 features optimal for fast <0.2s matching)
+        orb = cv2.ORB_create(nfeatures=600)
         keypoints, descriptors = orb.detectAndCompute(gray, None)
 
         if descriptors is None or len(keypoints) < 10:
