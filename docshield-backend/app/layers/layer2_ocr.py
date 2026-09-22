@@ -245,12 +245,11 @@ class OCRForensicExtractor:
                 tesseract_available = True
 
         if tesseract_available:
-            try:
                 try:
-                    tess_text = pytesseract.image_to_string(ocr_img, lang="eng+hin") or ""
+                    tess_text = pytesseract.image_to_string(ocr_img, lang="eng") or ""
                 except Exception:
                     try:
-                        tess_text = pytesseract.image_to_string(ocr_img, lang="eng") or ""
+                        tess_text = pytesseract.image_to_string(ocr_img, lang="eng+hin") or ""
                     except Exception:
                         tess_text = ""
                 tess_lines = [l.strip() for l in tess_text.split("\n") if l.strip()]
@@ -820,13 +819,15 @@ def run_layer2_analysis(image: Image.Image, custom_tesseract_cmd: str = "") -> D
     # 4. Extract visual fields via regex/heuristic OCR
     ocr_fields = OCRForensicExtractor.extract_structural_fields(text, lines, doc_type=doc_type)
 
-    # 5. Gemini Vision AI field extraction — runs independently of OCR
-    try:
-        from app.layers.gemini_extractor import extract_fields_with_ai, merge_ai_and_ocr_fields
-        ai_fields = extract_fields_with_ai(image, ocr_text_hint=text)
-    except Exception as ai_err:
-        logger.warning("AI extraction import/call error: %s", ai_err)
-        ai_fields = {}
+    # 5. Gemini Vision AI field extraction — skipped if MRZ already extracted 100% verified fields
+    ai_fields = {}
+    if not mrz_info.get("mrz_detected"):
+        try:
+            from app.layers.gemini_extractor import extract_fields_with_ai, merge_ai_and_ocr_fields
+            ai_fields = extract_fields_with_ai(image, ocr_text_hint=text)
+        except Exception as ai_err:
+            logger.warning("AI extraction import/call error: %s", ai_err)
+            ai_fields = {}
 
     # 6. Merge AI + OCR fields (AI enhances OCR, not replaces it)
     ai_confidence = ai_fields.get("ai_confidence", "medium") if ai_fields else "low"
