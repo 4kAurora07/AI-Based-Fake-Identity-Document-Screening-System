@@ -245,6 +245,7 @@ class OCRForensicExtractor:
                 tesseract_available = True
 
         if tesseract_available:
+            try:
                 try:
                     tess_text = pytesseract.image_to_string(ocr_img, lang="eng") or ""
                 except Exception:
