@@ -53,9 +53,9 @@ def health_check():
     }), 200
 
 
-@health_bp.route("/benchmark", methods=["GET"])
-def benchmark():
-    """GET /api/v1/benchmark - Profiles exact millisecond execution time of every forensic layer."""
+@health_bp.route("/benchmark/<layer_name>", methods=["GET"])
+def benchmark_layer(layer_name):
+    """GET /api/v1/benchmark/<layer_name> - Tests an individual forensic layer in isolation."""
     import time
     from PIL import Image, ImageDraw
 
@@ -65,63 +65,36 @@ def benchmark():
     d.text((40, 80), "P<INDTEST<<USER<<<<<<<<<<<<<<<<<<<<<<<<<<", fill=(0, 0, 0))
     d.text((40, 120), "A1234567<5IND9001011M2501014<<<<<<<<<<<<<<<<<<<02", fill=(0, 0, 0))
 
-    timings = {}
+    t0 = time.perf_counter()
+    res = {}
     try:
-        from app.layers.layer1_behavioral import run_layer1_analysis
-        t0 = time.perf_counter()
-        run_layer1_analysis(img, {}, {})
-        timings["layer1_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+        if layer_name == "l1":
+            from app.layers.layer1_behavioral import run_layer1_analysis
+            res = run_layer1_analysis(img, {}, {})
+        elif layer_name == "l2":
+            from app.layers.layer2_ocr import run_layer2_analysis
+            res = run_layer2_analysis(img)
+        elif layer_name == "l3":
+            from app.layers.layer3_forensics import run_layer3_analysis
+            res = run_layer3_analysis(img)
+        elif layer_name == "l4":
+            from app.layers.layer4_ai_detection import run_layer4_analysis
+            res = run_layer4_analysis(img)
+        elif layer_name == "vf":
+            from app.layers.visual_forensics import VisualForensicsEngine
+            res = VisualForensicsEngine.analyze_layout_consistency(img)
+        elif layer_name == "barcode":
+            from app.layers.barcode_crosscheck import BarcodeCrossCheckEngine
+            res = BarcodeCrossCheckEngine.cross_check(img, {})
+        elif layer_name == "face":
+            from app.layers.face_matcher import CrossDocumentFaceMatcher
+            res = CrossDocumentFaceMatcher.compare_documents(img, None)
+        else:
+            return jsonify({"error": f"Unknown layer: {layer_name}"}), 400
     except Exception as e:
-        timings["layer1_err"] = str(e)
+        return jsonify({"layer": layer_name, "error": str(e), "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}), 500
 
-    try:
-        from app.layers.layer2_ocr import run_layer2_analysis
-        t0 = time.perf_counter()
-        run_layer2_analysis(img)
-        timings["layer2_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-    except Exception as e:
-        timings["layer2_err"] = str(e)
-
-    try:
-        from app.layers.layer3_forensics import run_layer3_analysis
-        t0 = time.perf_counter()
-        run_layer3_analysis(img)
-        timings["layer3_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-    except Exception as e:
-        timings["layer3_err"] = str(e)
-
-    try:
-        from app.layers.layer4_ai_detection import run_layer4_analysis
-        t0 = time.perf_counter()
-        run_layer4_analysis(img)
-        timings["layer4_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-    except Exception as e:
-        timings["layer4_err"] = str(e)
-
-    try:
-        from app.layers.visual_forensics import VisualForensicsEngine
-        t0 = time.perf_counter()
-        VisualForensicsEngine.analyze_layout_consistency(img)
-        timings["visual_forensics_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-    except Exception as e:
-        timings["visual_forensics_err"] = str(e)
-
-    try:
-        from app.layers.barcode_crosscheck import BarcodeCrossCheckEngine
-        t0 = time.perf_counter()
-        BarcodeCrossCheckEngine.cross_check(img, {})
-        timings["barcode_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-    except Exception as e:
-        timings["barcode_err"] = str(e)
-
-    try:
-        from app.layers.face_matcher import CrossDocumentFaceMatcher
-        t0 = time.perf_counter()
-        CrossDocumentFaceMatcher.compare_documents(img, None)
-        timings["face_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-    except Exception as e:
-        timings["face_err"] = str(e)
-
-    timings["total_measured_ms"] = round(sum(v for v in timings.values() if isinstance(v, (int, float))), 2)
-
-    return jsonify({"status": "ok", "timings": timings}), 200
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+    # Strip numpy arrays for json serialization
+    clean_res = {k: v for k, v in res.items() if not str(type(v)).startswith("<class 'numpy")}
+    return jsonify({"layer": layer_name, "status": "ok", "elapsed_ms": elapsed_ms, "result_summary": str(clean_res)[:200]}), 200
